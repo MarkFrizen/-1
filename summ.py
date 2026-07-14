@@ -3,13 +3,13 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://192.168.0.140:1234/v1",
-    api_key="not-needed"  # если аутентификация отключена
+    api_key="sk-Lm-Fe0LkmZ1:QLXSkdZMglLvDyJvcsHt"
 )
 
 input_file = "input.csv"
 output_file = "output.csv"
 
-# Автоподбор кодировки
+# Автоматический подбор кодировок
 encodings = ["utf-8-sig", "cp1251", "utf-8"]
 texts = []
 for enc in encodings:
@@ -24,7 +24,7 @@ for enc in encodings:
     except (UnicodeDecodeError, KeyError):
         continue
 else:
-    print("Не удалось прочитать файл.")
+    print("Не удалось прочитать файл ни в одной кодировке.")
     exit(1)
 
 results = []
@@ -44,7 +44,7 @@ for idx, text in enumerate(texts):
         results.append({"id": idx, "original": text, "summary": summary})
         print(f"Обработан {idx+1}/{len(texts)}")
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка при обработке текста {idx}: {e}")
         results.append({"id": idx, "original": text, "summary": "ОШИБКА"})
 
 with open(output_file, "w", encoding="utf-8", newline="") as f:
@@ -52,4 +52,4 @@ with open(output_file, "w", encoding="utf-8", newline="") as f:
     writer.writeheader()
     writer.writerows(results)
 
-print(f"Готово! Результаты в {output_file}")
+print(f"Готово! Результаты сохранены в {output_file}")
