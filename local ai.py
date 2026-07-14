@@ -4,11 +4,11 @@ from openai import OpenAI
 
 # ================== НАСТРОЙКИ ==================
 BASE_URL = "http://192.168.0.140:1234/v1"
-API_KEY = "not-needed"          # если аутентификация отключена
-MODEL = "qwen/qwen3.6-35b-a3b"
-TEMPERATURE = 0.5               # экспериментируйте: 0.0 – строго, 1.0 – креативно
+API_KEY = "not-needed"
+MODEL = "qwen/qwen3.6-35b-a3b"      # предыдущая модель
+TEMPERATURE = 0.5
 TOP_P = 0.9
-TASK = "summarize"              # можно заменить на "extract_entities" или "classify"
+TASK = "summarize"                  # варианты: summarize, extract_entities, classify
 INPUT_FILE = "input.csv"
 OUTPUT_FILE = "output_local_ai.csv"
 # ==============================================
@@ -25,67 +25,67 @@ for enc in encodings:
             for row in reader:
                 if row.get("text") and row["text"].strip():
                     texts.append(row["text"])
-        print(f"✅ Файл прочитан в кодировке {enc}")
+        print(f"File read with encoding {enc}")
         break
     except (UnicodeDecodeError, KeyError):
         continue
 else:
-    print("❌ Не удалось прочитать файл.")
+    print("Failed to read file.")
     exit(1)
 
 # Промпты в зависимости от задачи
 if TASK == "summarize":
     SYSTEM_PROMPT = """
-Ты — ассистент, который кратко пересказывает тексты.
+You are an assistant that briefly summarizes texts.
 
-Примеры (Few-shot):
-Текст: "Вчера компания X объявила о рекордной прибыли."
-Пересказ: "Компания X сообщила о рекордной прибыли."
+Examples (Few-shot):
+Text: "Yesterday, company X announced record profits."
+Summary: "Company X reported record profits."
 
-Текст: "Учёные открыли новый вид динозавра в Аргентине."
-Пересказ: "В Аргентине обнаружен новый вид динозавра."
+Text: "Scientists discovered a new dinosaur species in Argentina."
+Summary: "A new dinosaur species found in Argentina."
 
-Теперь перескажи следующий текст. Сначала выдели ключевые факты (Chain-of-Thought), затем дай краткий пересказ в формате JSON:
+Now summarize the following text. First extract key facts (Chain-of-Thought), then give a brief summary in JSON:
 {
-  "summary": "краткий пересказ",
-  "keywords": ["ключевое1", "ключевое2"]
+  "summary": "brief summary",
+  "keywords": ["key1", "key2"]
 }
 """
-    USER_TEMPLATE = "Текст для пересказа:\n\n{text}"
+    USER_TEMPLATE = "Text to summarize:\n\n{text}"
 
 elif TASK == "extract_entities":
     SYSTEM_PROMPT = """
-Ты — система извлечения именованных сущностей (NER). Извлеки из текста все организации, людей, даты и места.
+You are a Named Entity Recognition (NER) system. Extract all organizations, persons, dates, and locations from the text.
 
-Пример (Few-shot):
-Текст: "Иван Петров из компании Рога и Копыта вчера посетил Москву."
-Результат: {"persons": ["Иван Петров"], "organizations": ["Рога и Копыта"], "locations": ["Москва"], "dates": ["вчера"]}
+Example (Few-shot):
+Text: "Ivan Petrov from Horns and Hooves company visited Moscow yesterday."
+Result: {"persons": ["Ivan Petrov"], "organizations": ["Horns and Hooves"], "locations": ["Moscow"], "dates": ["yesterday"]}
 
-Теперь обработай следующий текст и верни результат строго в JSON.
+Now process the following text and return JSON.
 """
-    USER_TEMPLATE = "Текст:\n\n{text}"
+    USER_TEMPLATE = "Text:\n\n{text}"
 
 elif TASK == "classify":
     SYSTEM_PROMPT = """
-Ты — классификатор тональности текста. Определи, позитивный, негативный или нейтральный текст.
+You are a sentiment classifier. Determine if the text is positive, negative, or neutral.
 
-Примеры (Few-shot):
-Текст: "Отличный фильм, всем рекомендую!"
-Тональность: "позитивная"
+Examples (Few-shot):
+Text: "Great movie, I recommend it to everyone!"
+Sentiment: "positive"
 
-Текст: "Ужасное обслуживание, больше не приду."
-Тональность: "негативная"
+Text: "Terrible service, I will never come back."
+Sentiment: "negative"
 
-Теперь определи тональность следующего текста и верни JSON:
+Now classify the following text and return JSON:
 {
-  "sentiment": "позитивная/негативная/нейтральная",
+  "sentiment": "positive/negative/neutral",
   "confidence": 0.95
 }
 """
-    USER_TEMPLATE = "Текст для анализа:\n\n{text}"
+    USER_TEMPLATE = "Text to analyze:\n\n{text}"
 
 else:
-    print("❌ Неизвестная задача. Доступны: summarize, extract_entities, classify")
+    print("Unknown task. Available: summarize, extract_entities, classify")
     exit(1)
 
 # Обработка текстов
@@ -108,13 +108,11 @@ for idx, text in enumerate(texts):
         tokens = response.usage.total_tokens
         total_tokens += tokens
 
-        # Попытка распарсить JSON
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
             data = {"raw": content}
 
-        # Сохраняем результат в зависимости от задачи
         if TASK == "summarize":
             summary = data.get("summary", content)
             keywords = ", ".join(data.get("keywords", []))
@@ -141,7 +139,7 @@ for idx, text in enumerate(texts):
                 "tokens": tokens
             })
         elif TASK == "classify":
-            sentiment = data.get("sentiment", "неизвестно")
+            sentiment = data.get("sentiment", "unknown")
             confidence = data.get("confidence", 0.0)
             results.append({
                 "id": idx,
@@ -151,10 +149,10 @@ for idx, text in enumerate(texts):
                 "tokens": tokens
             })
 
-        print(f"✅ Обработан {idx+1}/{len(texts)} (токенов: {tokens})")
+        print(f"Processed {idx+1}/{len(texts)} (tokens: {tokens})")
 
     except Exception as e:
-        print(f"❌ Ошибка при обработке текста {idx}: {e}")
+        print(f"Error processing text {idx}: {e}")
         results.append({
             "id": idx,
             "original": text,
@@ -169,5 +167,5 @@ with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
     writer.writeheader()
     writer.writerows(results)
 
-print(f"\n🎉 Готово! Результаты сохранены в {OUTPUT_FILE}")
-print(f"📊 Всего использовано токенов: {total_tokens}")
+print(f"\nDone. Results saved to {OUTPUT_FILE}")
+print(f"Total tokens used: {total_tokens}")
