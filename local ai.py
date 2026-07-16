@@ -24,76 +24,77 @@ RETRY_DELAY_SECONDS = 2
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
+
 def get_system_prompt(task: str) -> str:
     if task == "summarize":
         return """
-You are an assistant that briefly summarizes texts. Return ONLY a valid JSON object, no text before or after.
+Ты — ассистент, который кратко суммирует тексты. Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
 
-Examples (Few-shot):
-Text: "Yesterday, company X announced record profits."
-Key facts: company X, record profits.
-Summary: "Company X reported record profits."
+Примеры (few-shot):
+Текст: «Вчера компания X объявила о рекордной прибыли».
+Ключевые факты: компания X, рекордная прибыль.
+Резюме: «Компания X сообщила о рекордной прибыли».
 JSON:
 {
-  "summary": "Company X reported record profits.",
-  "keywords": ["company X", "record profits"]
+  "summary": "Компания X сообщила о рекордной прибыли.",
+  "keywords": ["компания X", "рекордная прибыль"]
 }
 
-Text: "Scientists discovered a new dinosaur species in Argentina."
-Key facts: scientists, new dinosaur species, Argentina.
-Summary: "A new dinosaur species found in Argentina."
+Текст: «Учёные обнаружили новый вид динозавра в Аргентине».
+Ключевые факты: учёные, новый вид динозавра, Аргентина.
+Резюме: «В Аргентине найден новый вид динозавра».
 JSON:
 {
-  "summary": "A new dinosaur species found in Argentina.",
-  "keywords": ["scientists", "dinosaur species", "Argentina"]
+  "summary": "В Аргентине найден новый вид динозавра.",
+  "keywords": ["учёные", "вид динозавра", "Аргентина"]
 }
 
-Now:
-1. First extract key facts (Chain-of-Thought).
-2. Then give a brief summary (1-2 sentences).
-3. Return ONLY JSON:
+Теперь:
+1. Сначала извлеки ключевые факты (цепочка рассуждений).
+2. Затем дай краткое резюме (1–2 предложения).
+3. Верни ТОЛЬКО JSON:
 {
-  "summary": "brief summary",
-  "keywords": ["key1", "key2", "key3"]
+  "summary": "краткое резюме",
+  "keywords": ["ключ1", "ключ2", "ключ3"]
 }
-NO EXPLANATIONS, NO TEXT BEFORE/AFTER JSON.
+НИКАКИХ ПОЯСНЕНИЙ, НИКАКОГО ТЕКСТА ДО/ПОСЛЕ JSON.
 """
     elif task == "extract_entities":
         return """
-You are a Named Entity Recognition (NER) system. Return ONLY a valid JSON object, no text before or after.
+Ты — система распознавания именованных сущностей (NER). Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
 
-Example:
-Text: "Ivan Petrov from Horns and Hooves company visited Moscow yesterday."
-Result:
+Пример:
+Текст: «Иван Петров из компании „Рога и копыта“ посетил Москву вчера».
+Результат:
 {
-  "persons": ["Ivan Petrov"],
-  "organizations": ["Horns and Hooves"],
-  "locations": ["Moscow"],
-  "dates": ["yesterday"]
+  "persons": ["Иван Петров"],
+  "organizations": ["Рога и копыта"],
+  "locations": ["Москва"],
+  "dates": ["вчера"]
 }
 
-Return JSON with keys: persons, organizations, locations, dates. NO EXPLANATIONS.
+Верни JSON с ключами: persons, organizations, locations, dates. НИКАКИХ ПОЯСНЕНИЙ.
 """
     elif task == "classify":
         return """
-You are a sentiment classifier. Return ONLY a valid JSON object, no text before or after.
+Ты — классификатор тональности. Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
 
-Examples:
-Text: "Great movie, I recommend it to everyone!"
-Result: {"sentiment": "positive", "confidence": 0.95}
+Примеры:
+Текст: «Отличный фильм, рекомендую всем!»
+Результат: {"sentiment": "positive", "confidence": 0.95}
 
-Text: "Terrible service, I will never come back."
-Result: {"sentiment": "negative", "confidence": 0.98}
+Текст: «Ужасный сервис, больше никогда не приду».
+Результат: {"sentiment": "negative", "confidence": 0.98}
 
-Return JSON:
+Верни JSON:
 {
   "sentiment": "positive/negative/neutral",
   "confidence": 0.0
 }
-NO EXPLANATIONS.
+НИКАКИХ ПОЯСНЕНИЙ.
 """
     else:
-        raise ValueError(f"Unknown task: {task}")
+        raise ValueError(f"Неизвестная задача: {task}")
 
 
 def read_texts_from_csv(path: str) -> List[str]:
@@ -109,11 +110,11 @@ def read_texts_from_csv(path: str) -> List[str]:
                     t = row.get("text", "")
                     if t and t.strip():
                         texts.append(t.strip())
-                print(f"File read with encoding {enc}, texts count: {len(texts)}")
+                print(f"Файл прочитан с кодировкой {enc}, количество текстов: {len(texts)}")
                 return texts
         except (UnicodeDecodeError, KeyError, FileNotFoundError):
             continue
-    raise RuntimeError("Failed to read file with any encoding.")
+    raise RuntimeError("Не удалось прочитать файл ни с одной из кодировок.")
 
 
 def call_llm_with_retry(
@@ -132,25 +133,26 @@ def call_llm_with_retry(
                 top_p=top_p,
                 # response_format убран, чтобы избежать 400 на локальных серверах
             )
-            content = response.choices[0].message.content
-            tokens = response.usage.total_tokens
+            content = response.choices.message.content
             return content
         except Exception as e:
             last_exc = e
-            print(f"Attempt {attempt}/{MAX_RETRIES} failed: {e}")
+            print(f"Попытка {attempt}/{MAX_RETRIES} не удалась: {e}")
             if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY_SECONDS * attempt)
-    print(f"All retries failed. Last error: {last_exc}")
+                delay = RETRY_DELAY_SECONDS * attempt
+                print(f"   Ожидание {delay} сек перед следующей попыткой...")
+                time.sleep(delay)
+    print(f"Все попытки исчерпаны. Последняя ошибка: {last_exc}")
     return None
 
 
 def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
     if not content:
-        return {"error": "No response from model"}
+        return {"error": "Нет ответа от модели"}
     try:
         data = json.loads(content)
         if not isinstance(data, dict):
-            return {"error": "Response is not a JSON object", "raw": content}
+            return {"error": "Ответ не является JSON-объектом", "raw": content}
         return data
     except json.JSONDecodeError as e:
         # Пытаемся найти JSON внутри текста (на случай, если модель добавила преамбулу)
@@ -163,13 +165,13 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                     return data
             except Exception:
                 pass
-        return {"error": f"JSON decode error: {e}", "raw": content}
+        return {"error": f"Ошибка декодирования JSON: {e}", "raw": content}
 
 
 def main():
     texts = read_texts_from_csv(INPUT_FILE)
     if not texts:
-        print("No texts to process.")
+        print("Нет текстов для обработки.")
         fieldnames = ["id", "original", "summary", "keywords", "tokens", "error"]
         with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -181,8 +183,8 @@ def main():
     total_tokens = 0
 
     for idx, text in enumerate(texts):
-        print(f"Processing {idx+1}/{len(texts)}...")
-        user_prompt = f"Text to analyze:\n\n{text}"
+        print(f"Обработка {idx+1}/{len(texts)}...")
+        user_prompt = f"Текст для анализа:\n\n{text}"
 
         messages: List[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt},
@@ -197,12 +199,8 @@ def main():
         )
 
         tokens_used = 0
-        # Если есть response, можно взять tokens, но при ошибках response может не быть
-        # Для простоты считаем tokens только при успешном ответе
-        if content is not None:
-            # tokens мы не можем получить без объекта response, поэтому пока оставим 0
-            # либо можно модифицировать call_llm_with_retry, чтобы он возвращал (content, tokens)
-            pass
+        # Токены не сохраняются, так как функция call_llm_with_retry возвращает только content.
+        # Для учёта токенов нужно модифицировать функцию, чтобы она возвращала (content, tokens).
 
         data = parse_json_safe(content)
 
@@ -216,7 +214,7 @@ def main():
                 "tokens": tokens_used,
                 "error": error_msg,
             })
-            print(f"   Error: {error_msg}")
+            print(f"   Ошибка: {error_msg}")
             continue
 
         if TASK == "summarize":
@@ -274,10 +272,10 @@ def main():
                 "summary": "",
                 "keywords": "",
                 "tokens": tokens_used,
-                "error": "Unknown task",
+                "error": "Неизвестная задача",
             })
 
-        print(f"   Done (tokens: {tokens_used})")
+        print(f"   Готово (токены: {tokens_used})")
 
     base_fields = ["id", "original"]
     if TASK == "summarize":
@@ -294,8 +292,8 @@ def main():
         writer.writeheader()
         writer.writerows(results)
 
-    print(f"\nDone. Results saved to {OUTPUT_FILE}")
-    print(f"Total tokens used: {total_tokens}")
+    print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
+    print(f"Всего токенов использовано: {total_tokens}")
 
 
 if __name__ == "__main__":
