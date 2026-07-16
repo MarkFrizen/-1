@@ -24,7 +24,6 @@ RETRY_DELAY_SECONDS = 2
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
-
 def get_system_prompt(task: str) -> str:
     if task == "summarize":
         return """
