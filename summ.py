@@ -4,12 +4,12 @@ from openai import OpenAI
 
 # --- Настройка клиента ---
 client = OpenAI(
-    base_url="http://192.168.0.140:1234/v1",
+    base_url="http://192.168.8.11:1234/v1",
     api_key="not-needed"
 )
 
-# --- Модель (предыдущая, требует ~28 ГБ ОЗУ) ---
-MODEL = "qwen/qwen3.6-35b-a3b"
+# --- Модель ---
+MODEL = "qwen/qwen3.6-27b"
 
 # --- Вход / выход ---
 input_file = "input.csv"

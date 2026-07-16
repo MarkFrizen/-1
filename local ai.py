@@ -3,9 +3,9 @@ import json
 from openai import OpenAI
 
 # ================== НАСТРОЙКИ ==================
-BASE_URL = "http://192.168.0.140:1234/v1"
+BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
-MODEL = "qwen/qwen3.6-35b-a3b"      # предыдущая модель
+MODEL = "qwen/qwen3.6-27b"
 TEMPERATURE = 0.5
 TOP_P = 0.9
 TASK = "summarize"                  # варианты: summarize, extract_entities, classify
