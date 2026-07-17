@@ -3,7 +3,6 @@ import json
 import time
 import re
 from typing import Any, Dict, List, Optional, Tuple
-
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
