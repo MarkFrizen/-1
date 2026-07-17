@@ -115,7 +115,6 @@ def read_texts_from_csv(path: str) -> List[str]:
             continue
     raise RuntimeError("Не удалось прочитать файл ни с одной из кодировок.")
 
-
 def call_llm_with_retry(
         messages: List[ChatCompletionMessageParam],
         model: str,
@@ -130,7 +129,6 @@ def call_llm_with_retry(
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
-                # response_format убран, чтобы избежать 400 на локальных серверах
             )
             content = response.choices.message.content
             return content
