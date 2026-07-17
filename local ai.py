@@ -96,7 +96,6 @@ JSON:
     else:
         raise ValueError(f"Неизвестная задача: {task}")
 
-
 def read_texts_from_csv(path: str) -> List[str]:
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
     for enc in encodings:
