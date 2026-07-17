@@ -1,19 +1,26 @@
 import csv
 import json
 import time
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 # ================== НАСТРОЙКИ ==================
+# Адрес твоего локального сервера (Ollama/vLLM)
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
+# Имя модели, как она зарегистрирована на сервере
 MODEL = "qwen/qwen3.6-27b"
 
-TEMPERATURE = 0.5
-TOP_P = 0.9
-TASK = "summarize"  # summarize, extract_entities, classify
+# Параметры для строгого вывода JSON
+# Temperature 0.1 делает модель менее творческой и более предсказуемой
+TEMPERATURE = 0.1
+TOP_P = 0.5
+
+# Тип задачи: "summarize", "extract_entities" или "classify"
+TASK = "summarize"
 
 INPUT_FILE = "input.csv"
 OUTPUT_FILE = "output.csv"
@@ -26,46 +33,32 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 
 def get_system_prompt(task: str) -> str:
+    """Формирует жесткий системный промпт с примерами и инструкциями."""
     if task == "summarize":
         return """
-Ты — ассистент, который кратко суммирует тексты. Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
+Ты — строгий JSON-генератор. Твоя задача — вернуть ТОЛЬКО валидный JSON-объект.
+НИКАКИХ пояснений, никаких слов до или после JSON, никаких Markdown-блоков (```).
 
-Примеры (few-shot):
-Текст: «Вчера компания X объявила о рекордной прибыли».
-Ключевые факты: компания X, рекордная прибыль.
-Резюме: «Компания X сообщила о рекордной прибыли».
-JSON:
+Формат ответа:
 {
-  "summary": "Компания X сообщила о рекордной прибыли.",
-  "keywords": ["компания X", "рекордная прибыль"]
+  "summary": "одно предложение с сутью текста",
+  "keywords": ["ключевое слово 1", "ключевое слово 2"]
 }
 
-Текст: «Учёные обнаружили новый вид динозавра в Аргентине».
-Ключевые факты: учёные, новый вид динозавра, Аргентина.
-Резюме: «В Аргентине найден новый вид динозавра».
-JSON:
-{
-  "summary": "В Аргентине найден новый вид динозавра.",
-  "keywords": ["учёные", "вид динозавра", "Аргентина"]
-}
+Цепочка рассуждений (выполняется внутри тебя, не выводится в ответ):
+1. Выпиши 3 главных факта из текста.
+2. Сформулируй резюме на их основе (1-2 предложения).
+3. Сформируй список из 3-5 ключевых слов.
+4. Оберни результат в JSON строго по шаблону выше.
 
-Теперь:
-1. Сначала извлеки ключевые факты (цепочка рассуждений).
-2. Затем дай краткое резюме (1–2 предложения).
-3. Верни ТОЛЬКО JSON:
-{
-  "summary": "краткое резюме",
-  "keywords": ["ключ1", "ключ2", "ключ3"]
-}
-НИКАКИХ ПОЯСНЕНИЙ, НИКАКОГО ТЕКСТА ДО/ПОСЛЕ JSON.
+ВАЖНО: Если ты добавишь хоть один символ вне фигурных скобок {}, задача считается проваленной.
 """
     elif task == "extract_entities":
         return """
-Ты — система распознавания именованных сущностей (NER). Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
+Ты — система распознавания именованных сущностей (NER). Верни ТОЛЬКО корректный JSON-объект.
+Никаких пояснений, никакого текста до или после JSON.
 
-Пример:
-Текст: «Иван Петров из компании „Рога и копыта“ посетил Москву вчера».
-Результат:
+Формат JSON:
 {
   "persons": ["Иван Петров"],
   "organizations": ["Рога и копыта"],
@@ -73,30 +66,27 @@ JSON:
   "dates": ["вчера"]
 }
 
-Верни JSON с ключами: persons, organizations, locations, dates. НИКАКИХ ПОЯСНЕНИЙ.
+Извлеки сущности строго по этим категориям. Не выдумывай несуществующие сущности.
 """
     elif task == "classify":
         return """
-Ты — классификатор тональности. Верни ТОЛЬКО корректный JSON-объект, без какого-либо текста до или после него.
+Ты — классификатор тональности. Верни ТОЛЬКО корректный JSON-объект.
+Никаких пояснений, никакого текста до или после JSON.
 
-Примеры:
-Текст: «Отличный фильм, рекомендую всем!»
-Результат: {"sentiment": "positive", "confidence": 0.95}
-
-Текст: «Ужасный сервис, больше никогда не приду».
-Результат: {"sentiment": "negative", "confidence": 0.98}
-
-Верни JSON:
+Формат JSON:
 {
   "sentiment": "positive/negative/neutral",
   "confidence": 0.0
 }
-НИКАКИХ ПОЯСНЕНИЙ.
+
+Confidence должен быть числом от 0.0 до 1.0.
 """
     else:
         raise ValueError(f"Неизвестная задача: {task}")
 
+
 def read_texts_from_csv(path: str) -> List[str]:
+    """Читает CSV, пробуя разные кодировки для совместимости."""
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
     for enc in encodings:
         try:
@@ -115,12 +105,17 @@ def read_texts_from_csv(path: str) -> List[str]:
             continue
     raise RuntimeError("Не удалось прочитать файл ни с одной из кодировок.")
 
+
 def call_llm_with_retry(
         messages: List[ChatCompletionMessageParam],
         model: str,
         temperature: float,
         top_p: float,
-) -> Optional[str]:
+) -> Tuple[Optional[str], int]:
+    """
+    Вызывает модель с повторными попытками.
+    Возвращает кортеж: (текст ответа, количество токенов).
+    """
     last_exc: Optional[Exception] = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -130,8 +125,10 @@ def call_llm_with_retry(
                 temperature=temperature,
                 top_p=top_p,
             )
+            # ИСПРАВЛЕНИЕ ОШИБКИ: берем первый элемент списка choices
             content = response.choices.message.content
-            return content
+            tokens = response.usage.total_tokens
+            return content, tokens
         except Exception as e:
             last_exc = e
             print(f"Попытка {attempt}/{MAX_RETRIES} не удалась: {e}")
@@ -139,37 +136,67 @@ def call_llm_with_retry(
                 delay = RETRY_DELAY_SECONDS * attempt
                 print(f"   Ожидание {delay} сек перед следующей попыткой...")
                 time.sleep(delay)
+
     print(f"Все попытки исчерпаны. Последняя ошибка: {last_exc}")
-    return None
+    return None, 0
 
 
 def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
+    """
+    Пытается распарсить JSON. Если не получается, ищет JSON внутри текста.
+    Всегда возвращает словарь с полями 'data' (или 'error') и 'raw'.
+    """
     if not content:
-        return {"error": "Нет ответа от модели"}
+        return {"error": "Нет ответа от модели", "raw": "", "data": None}
+
+    raw_response = content
+
+    # Попытка 1: Прямой парсинг
     try:
         data = json.loads(content)
-        if not isinstance(data, dict):
-            return {"error": "Ответ не является JSON-объектом", "raw": content}
-        return data
-    except json.JSONDecodeError as e:
-        # Пытаемся найти JSON внутри текста (на случай, если модель добавила преамбулу)
-        import re
-        match = re.search(r"\{[\s\S]*\}", content)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-                if isinstance(data, dict):
-                    return data
-            except Exception:
-                pass
-        return {"error": f"Ошибка декодирования JSON: {e}", "raw": content}
+        if isinstance(data, dict):
+            return {"data": data, "raw": raw_response, "error": None}
+    except json.JSONDecodeError:
+        pass
+
+    # Попытка 2: Поиск JSON через Regex (если модель добавила преамбулу)
+    match = re.search(r"\{[\s\S]*\}", content)
+    if match:
+        json_str = match.group(0)
+        try:
+            data = json.loads(json_str)
+            if isinstance(data, dict):
+                return {"data": data, "raw": raw_response, "error": None}
+        except Exception:
+            pass
+
+    # Попытка 3: Поиск внутри Markdown блока ```json ... ```
+    code_block_match = re.search(r"```json\s*([\s\S]*?)```", content)
+    if code_block_match:
+        json_str = code_block_match.group(1).strip()
+        try:
+            data = json.loads(json_str)
+            if isinstance(data, dict):
+                return {"data": data, "raw": raw_response, "error": None}
+        except Exception:
+            pass
+
+    # Если ничего не помогло
+    return {"error": "Не удалось распарсить JSON", "raw": raw_response, "data": None}
 
 
 def main():
-    texts = read_texts_from_csv(INPUT_FILE)
+    # Чтение входных данных
+    try:
+        texts = read_texts_from_csv(INPUT_FILE)
+    except RuntimeError as e:
+        print(f"Ошибка чтения файла: {e}")
+        return
+
     if not texts:
         print("Нет текстов для обработки.")
-        fieldnames = ["id", "original", "summary", "keywords", "tokens", "error"]
+        # Создаем пустой CSV с заголовками
+        fieldnames = ["id", "original", "summary", "keywords", "tokens", "error", "raw_response"]
         with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -182,26 +209,32 @@ def main():
     for idx, text in enumerate(texts):
         print(f"Обработка {idx+1}/{len(texts)}...")
         user_prompt = f"Текст для анализа:\n\n{text}"
-
         messages: List[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
-        content = call_llm_with_retry(
+        # Получение ответа и токенов
+        content, tokens_used = call_llm_with_retry(
             messages=messages,
             model=MODEL,
             temperature=TEMPERATURE,
             top_p=TOP_P,
         )
+        total_tokens += tokens_used
 
-        tokens_used = 0
-        # Токены не сохраняются, так как функция call_llm_with_retry возвращает только content.
-        # Для учёта токенов нужно модифицировать функцию, чтобы она возвращала (content, tokens).
+        # Парсинг ответа
+        parse_result = parse_json_safe(content)
+        data = parse_result["data"]
+        error_msg = parse_result["error"]
+        raw_response = parse_result["raw"]
 
-        data = parse_json_safe(content)
+        # Вывод сырого ответа в консоль для отладки (если есть ошибка)
+        if error_msg:
+            print(f"   [ОТЛАДКА] Сырой ответ модели (проблема с форматом):")
+            print(raw_response[:500]) # Вывод первых 500 символов, чтобы не засорять консоль
+            print("   [ОТЛАДКА] Конец сырого ответа")
 
-        error_msg = data.get("error")
         if error_msg:
             results.append({
                 "id": idx,
@@ -210,10 +243,12 @@ def main():
                 "keywords": "",
                 "tokens": tokens_used,
                 "error": error_msg,
+                "raw_response": raw_response
             })
             print(f"   Ошибка: {error_msg}")
             continue
 
+        # Формирование результата в зависимости от задачи
         if TASK == "summarize":
             summary = data.get("summary", "")
             keywords = data.get("keywords", [])
@@ -226,6 +261,7 @@ def main():
                 "keywords": ", ".join(keywords),
                 "tokens": tokens_used,
                 "error": "",
+                "raw_response": raw_response
             })
 
         elif TASK == "extract_entities":
@@ -243,9 +279,9 @@ def main():
                 "organizations": ", ".join(orgs),
                 "locations": ", ".join(locs),
                 "dates": ", ".join(dates),
-                "raw": json.dumps(data),
                 "tokens": tokens_used,
                 "error": "",
+                "raw_response": raw_response
             })
 
         elif TASK == "classify":
@@ -260,30 +296,22 @@ def main():
                 "confidence": confidence,
                 "tokens": tokens_used,
                 "error": "",
+                "raw_response": raw_response
             })
-
-        else:
-            results.append({
-                "id": idx,
-                "original": text,
-                "summary": "",
-                "keywords": "",
-                "tokens": tokens_used,
-                "error": "Неизвестная задача",
-            })
-
         print(f"   Готово (токены: {tokens_used})")
 
+    # Определение заголовков CSV
     base_fields = ["id", "original"]
     if TASK == "summarize":
-        fieldnames = base_fields + ["summary", "keywords", "tokens", "error"]
+        fieldnames = base_fields + ["summary", "keywords", "tokens", "error", "raw_response"]
     elif TASK == "extract_entities":
-        fieldnames = base_fields + ["persons", "organizations", "locations", "dates", "raw", "tokens", "error"]
+        fieldnames = base_fields + ["persons", "organizations", "locations", "dates", "tokens", "error", "raw_response"]
     elif TASK == "classify":
-        fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error"]
+        fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error", "raw_response"]
     else:
-        fieldnames = base_fields + ["tokens", "error"]
+        fieldnames = base_fields + ["tokens", "error", "raw_response"]
 
+    # Запись результатов
     with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -291,7 +319,6 @@ def main():
 
     print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
     print(f"Всего токенов использовано: {total_tokens}")
-
 
 if __name__ == "__main__":
     main()
