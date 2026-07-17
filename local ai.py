@@ -30,7 +30,6 @@ RETRY_DELAY_SECONDS = 2
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
-
 def get_system_prompt(task: str) -> str:
     """Формирует жесткий системный промпт с примерами и инструкциями."""
     if task == "summarize":
@@ -83,7 +82,6 @@ Confidence должен быть числом от 0.0 до 1.0.
     else:
         raise ValueError(f"Неизвестная задача: {task}")
 
-
 def read_texts_from_csv(path: str) -> List[str]:
     """Читает CSV, пробуя разные кодировки для совместимости."""
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
@@ -103,7 +101,6 @@ def read_texts_from_csv(path: str) -> List[str]:
         except (UnicodeDecodeError, KeyError, FileNotFoundError):
             continue
     raise RuntimeError("Не удалось прочитать файл ни с одной из кодировок.")
-
 
 def call_llm_with_retry(
         messages: List[ChatCompletionMessageParam],
@@ -135,10 +132,8 @@ def call_llm_with_retry(
                 delay = RETRY_DELAY_SECONDS * attempt
                 print(f"   Ожидание {delay} сек перед следующей попыткой...")
                 time.sleep(delay)
-
     print(f"Все попытки исчерпаны. Последняя ошибка: {last_exc}")
     return None, 0
-
 
 def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
     """
@@ -147,7 +142,6 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
     """
     if not content:
         return {"error": "Нет ответа от модели", "raw": "", "data": None}
-
     raw_response = content
 
     # Попытка 1: Прямой парсинг
@@ -157,7 +151,6 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
             return {"data": data, "raw": raw_response, "error": None}
     except json.JSONDecodeError:
         pass
-
     # Попытка 2: Поиск JSON через Regex (если модель добавила преамбулу)
     match = re.search(r"\{[\s\S]*\}", content)
     if match:
@@ -168,7 +161,6 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                 return {"data": data, "raw": raw_response, "error": None}
         except Exception:
             pass
-
     # Попытка 3: Поиск внутри Markdown блока ```json ... ```
     code_block_match = re.search(r"```json\s*([\s\S]*?)```", content)
     if code_block_match:
@@ -179,10 +171,8 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                 return {"data": data, "raw": raw_response, "error": None}
         except Exception:
             pass
-
     # Если ничего не помогло
     return {"error": "Не удалось распарсить JSON", "raw": raw_response, "data": None}
-
 
 def main():
     # Чтение входных данных
@@ -191,7 +181,6 @@ def main():
     except RuntimeError as e:
         print(f"Ошибка чтения файла: {e}")
         return
-
     if not texts:
         print("Нет текстов для обработки.")
         # Создаем пустой CSV с заголовками
@@ -200,11 +189,9 @@ def main():
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
         return
-
     system_prompt = get_system_prompt(TASK)
     results: List[Dict[str, Any]] = []
     total_tokens = 0
-
     for idx, text in enumerate(texts):
         print(f"Обработка {idx+1}/{len(texts)}...")
         user_prompt = f"Текст для анализа:\n\n{text}"
@@ -212,7 +199,6 @@ def main():
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-
         # Получение ответа и токенов
         content, tokens_used = call_llm_with_retry(
             messages=messages,
@@ -221,19 +207,16 @@ def main():
             top_p=TOP_P,
         )
         total_tokens += tokens_used
-
         # Парсинг ответа
         parse_result = parse_json_safe(content)
         data = parse_result["data"]
         error_msg = parse_result["error"]
         raw_response = parse_result["raw"]
-
         # Вывод сырого ответа в консоль для отладки (если есть ошибка)
         if error_msg:
             print(f"   [ОТЛАДКА] Сырой ответ модели (проблема с форматом):")
             print(raw_response[:500]) # Вывод первых 500 символов, чтобы не засорять консоль
             print("   [ОТЛАДКА] Конец сырого ответа")
-
         if error_msg:
             results.append({
                 "id": idx,
@@ -246,7 +229,6 @@ def main():
             })
             print(f"   Ошибка: {error_msg}")
             continue
-
         # Формирование результата в зависимости от задачи
         if TASK == "summarize":
             summary = data.get("summary", "")
@@ -262,7 +244,6 @@ def main():
                 "error": "",
                 "raw_response": raw_response
             })
-
         elif TASK == "extract_entities":
             persons = data.get("persons", [])
             orgs = data.get("organizations", [])
@@ -282,7 +263,6 @@ def main():
                 "error": "",
                 "raw_response": raw_response
             })
-
         elif TASK == "classify":
             sentiment = data.get("sentiment", "unknown")
             confidence = data.get("confidence", 0.0)
@@ -315,9 +295,7 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
-
     print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
     print(f"Всего токенов использовано: {total_tokens}")
-
 if __name__ == "__main__":
     main()
