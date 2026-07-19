@@ -10,20 +10,20 @@ from openai.types.chat import ChatCompletionMessageParam
 # Адрес твоего локального сервера (Ollama/vLLM)
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
-# Имя модели, как она зарегистрирована на сервере
+
+# Имя модели.
+# ВАЖНО: Проверь точное имя модели на сервере командой: curl http://192.168.8.11:1234/v1/models
+# Если там написано "qwen2.5:7b", а тут стоит "qwen/qwen3.6-27b", скрипт упадет с ошибкой 404.
 MODEL = "qwen/qwen3.6-27b"
 
 # Параметры для строгого вывода JSON
-# Temperature 0.1 делает модель менее творческой и более предсказуемой
 TEMPERATURE = 0.1
 TOP_P = 0.5
 
 # Тип задачи: "summarize", "extract_entities" или "classify"
 TASK = "summarize"
-
 INPUT_FILE = "input.csv"
 OUTPUT_FILE = "output.csv"
-
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2
 # ==============================================
@@ -36,26 +36,22 @@ def get_system_prompt(task: str) -> str:
         return """
 Ты — строгий JSON-генератор. Твоя задача — вернуть ТОЛЬКО валидный JSON-объект.
 НИКАКИХ пояснений, никаких слов до или после JSON, никаких Markdown-блоков (```).
-
 Формат ответа:
 {
   "summary": "одно предложение с сутью текста",
   "keywords": ["ключевое слово 1", "ключевое слово 2"]
 }
-
 Цепочка рассуждений (выполняется внутри тебя, не выводится в ответ):
 1. Выпиши 3 главных факта из текста.
 2. Сформулируй резюме на их основе (1-2 предложения).
 3. Сформируй список из 3-5 ключевых слов.
 4. Оберни результат в JSON строго по шаблону выше.
-
 ВАЖНО: Если ты добавишь хоть один символ вне фигурных скобок {}, задача считается проваленной.
 """
     elif task == "extract_entities":
         return """
 Ты — система распознавания именованных сущностей (NER). Верни ТОЛЬКО корректный JSON-объект.
 Никаких пояснений, никакого текста до или после JSON.
-
 Формат JSON:
 {
   "persons": ["Иван Петров"],
@@ -63,20 +59,17 @@ def get_system_prompt(task: str) -> str:
   "locations": ["Москва"],
   "dates": ["вчера"]
 }
-
 Извлеки сущности строго по этим категориям. Не выдумывай несуществующие сущности.
 """
     elif task == "classify":
         return """
 Ты — классификатор тональности. Верни ТОЛЬКО корректный JSON-объект.
 Никаких пояснений, никакого текста до или после JSON.
-
 Формат JSON:
 {
   "sentiment": "positive/negative/neutral",
   "confidence": 0.0
 }
-
 Confidence должен быть числом от 0.0 до 1.0.
 """
     else:
@@ -120,8 +113,10 @@ def call_llm_with_retry(
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
+                # ДОБАВЛЕНО: Требуем от модели строго JSON формат (работает на Qwen, GPT-4o, Claude)
+                response_format={"type": "json_object"}
             )
-            # ИСПРАВЛЕНИЕ ОШИБКИ: берем первый элемент списка choices
+            # ИСПРАВЛЕНО: choices - это список, нужно брать элемент по индексу
             content = response.choices.message.content
             tokens = response.usage.total_tokens
             return content, tokens
@@ -144,14 +139,15 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
         return {"error": "Нет ответа от модели", "raw": "", "data": None}
     raw_response = content
 
-    # Попытка 1: Прямой парсинг
+    # Попытка 1: Прямой парсинг (если модель вернула чистый JSON благодаря response_format)
     try:
         data = json.loads(content)
         if isinstance(data, dict):
             return {"data": data, "raw": raw_response, "error": None}
     except json.JSONDecodeError:
         pass
-    # Попытка 2: Поиск JSON через Regex (если модель добавила преамбулу)
+
+    # Попытка 2: Поиск JSON через Regex (если модель добавила преамбулу несмотря на инструкции)
     match = re.search(r"\{[\s\S]*\}", content)
     if match:
         json_str = match.group(0)
@@ -161,6 +157,7 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                 return {"data": data, "raw": raw_response, "error": None}
         except Exception:
             pass
+
     # Попытка 3: Поиск внутри Markdown блока ```json ... ```
     code_block_match = re.search(r"```json\s*([\s\S]*?)```", content)
     if code_block_match:
@@ -171,9 +168,9 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                 return {"data": data, "raw": raw_response, "error": None}
         except Exception:
             pass
+
     # Если ничего не помогло
     return {"error": "Не удалось распарсить JSON", "raw": raw_response, "data": None}
-
 def main():
     # Чтение входных данных
     try:
@@ -184,7 +181,16 @@ def main():
     if not texts:
         print("Нет текстов для обработки.")
         # Создаем пустой CSV с заголовками
-        fieldnames = ["id", "original", "summary", "keywords", "tokens", "error", "raw_response"]
+        base_fields = ["id", "original"]
+        if TASK == "summarize":
+            fieldnames = base_fields + ["summary", "keywords", "tokens", "error", "raw_response"]
+        elif TASK == "extract_entities":
+            fieldnames = base_fields + ["persons", "organizations", "locations", "dates", "tokens", "error", "raw_response"]
+        elif TASK == "classify":
+            fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error", "raw_response"]
+        else:
+            fieldnames = base_fields + ["tokens", "error", "raw_response"]
+
         with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -199,6 +205,7 @@ def main():
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
         # Получение ответа и токенов
         content, tokens_used = call_llm_with_retry(
             messages=messages,
@@ -207,15 +214,17 @@ def main():
             top_p=TOP_P,
         )
         total_tokens += tokens_used
+
         # Парсинг ответа
         parse_result = parse_json_safe(content)
         data = parse_result["data"]
         error_msg = parse_result["error"]
         raw_response = parse_result["raw"]
+
         # Вывод сырого ответа в консоль для отладки (если есть ошибка)
         if error_msg:
             print(f"   [ОТЛАДКА] Сырой ответ модели (проблема с форматом):")
-            print(raw_response[:500]) # Вывод первых 500 символов, чтобы не засорять консоль
+            print(raw_response[:500]) # Вывод первых 500 символов
             print("   [ОТЛАДКА] Конец сырого ответа")
         if error_msg:
             results.append({
@@ -229,6 +238,7 @@ def main():
             })
             print(f"   Ошибка: {error_msg}")
             continue
+
         # Формирование результата в зависимости от задачи
         if TASK == "summarize":
             summary = data.get("summary", "")
@@ -249,6 +259,8 @@ def main():
             orgs = data.get("organizations", [])
             locs = data.get("locations", [])
             dates = data.get("dates", [])
+
+            # Защита от не-списков
             for lst in [persons, orgs, locs, dates]:
                 if not isinstance(lst, list):
                     lst = []
@@ -297,5 +309,6 @@ def main():
         writer.writerows(results)
     print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
     print(f"Всего токенов использовано: {total_tokens}")
+
 if __name__ == "__main__":
     main()
