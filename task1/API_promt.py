@@ -12,8 +12,6 @@ BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
 
 # Имя модели.
-# ВАЖНО: Проверь точное имя модели на сервере командой: curl http://192.168.8.11:1234/v1/models
-# Если там написано "qwen2.5:7b", а тут стоит "qwen/qwen3.6-27b", скрипт упадет с ошибкой 404.
 MODEL = "qwen/qwen3.6-27b"
 
 # Параметры для строгого вывода JSON
@@ -113,10 +111,8 @@ def call_llm_with_retry(
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
-                # ДОБАВЛЕНО: Требуем от модели строго JSON формат (работает на Qwen, GPT-4o, Claude)
                 response_format={"type": "json_object"}
             )
-            # ИСПРАВЛЕНО: choices - это список, нужно брать элемент по индексу
             content = response.choices.message.content
             tokens = response.usage.total_tokens
             return content, tokens
