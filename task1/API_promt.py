@@ -7,7 +7,7 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 # ================== НАСТРОЙКИ ==================
-# Адрес твоего локального сервера (Ollama/vLLM)
+# Адрес локального сервера
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
 
@@ -111,9 +111,8 @@ def call_llm_with_retry(
                 messages=messages,
                 temperature=temperature,
                 top_p=top_p,
-                response_format={"type": "json_object"}
             )
-            content = response.choices.message.content
+            content = response.choices[0].message.content
             tokens = response.usage.total_tokens
             return content, tokens
         except Exception as e:
@@ -135,7 +134,7 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
         return {"error": "Нет ответа от модели", "raw": "", "data": None}
     raw_response = content
 
-    # Попытка 1: Прямой парсинг (если модель вернула чистый JSON благодаря response_format)
+    # Попытка 1: Прямой парсинг
     try:
         data = json.loads(content)
         if isinstance(data, dict):
@@ -143,7 +142,7 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
-    # Попытка 2: Поиск JSON через Regex (если модель добавила преамбулу несмотря на инструкции)
+    # Попытка 2: Поиск JSON через Regex
     match = re.search(r"\{[\s\S]*\}", content)
     if match:
         json_str = match.group(0)
@@ -164,9 +163,8 @@ def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
                 return {"data": data, "raw": raw_response, "error": None}
         except Exception:
             pass
-
-    # Если ничего не помогло
     return {"error": "Не удалось распарсить JSON", "raw": raw_response, "data": None}
+
 def main():
     # Чтение входных данных
     try:
@@ -176,7 +174,6 @@ def main():
         return
     if not texts:
         print("Нет текстов для обработки.")
-        # Создаем пустой CSV с заголовками
         base_fields = ["id", "original"]
         if TASK == "summarize":
             fieldnames = base_fields + ["summary", "keywords", "tokens", "error", "raw_response"]
@@ -186,7 +183,6 @@ def main():
             fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error", "raw_response"]
         else:
             fieldnames = base_fields + ["tokens", "error", "raw_response"]
-
         with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
@@ -219,9 +215,9 @@ def main():
 
         # Вывод сырого ответа в консоль для отладки (если есть ошибка)
         if error_msg:
-            print(f"   [ОТЛАДКА] Сырой ответ модели (проблема с форматом):")
-            print(raw_response[:500]) # Вывод первых 500 символов
-            print("   [ОТЛАДКА] Конец сырого ответа")
+            print(f"[ОТЛАДКА] Сырой ответ модели:")
+            print(raw_response[:500])
+            print("[ОТЛАДКА] Конец сырого ответа")
         if error_msg:
             results.append({
                 "id": idx,
@@ -255,8 +251,6 @@ def main():
             orgs = data.get("organizations", [])
             locs = data.get("locations", [])
             dates = data.get("dates", [])
-
-            # Защита от не-списков
             for lst in [persons, orgs, locs, dates]:
                 if not isinstance(lst, list):
                     lst = []
@@ -305,6 +299,5 @@ def main():
         writer.writerows(results)
     print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
     print(f"Всего токенов использовано: {total_tokens}")
-
 if __name__ == "__main__":
     main()
