@@ -3,15 +3,19 @@ import csv
 from openai import OpenAI
 
 # --- КОНФИГУРАЦИЯ ---
+TIMEOUT_MINUTES = 5  # <-- Меняйте это число: 5, 10, 20 минут и т.д.
+timeout_seconds = TIMEOUT_MINUTES * 60  # Конвертируем в секунды (библиотека openai требует секунды)
+
 client = OpenAI(
     base_url="http://192.168.8.11:1234/v1",
     api_key="lm-studio",
-    timeout=300  # Увеличили до 5 минут — критично для больших моделей
+    timeout=timeout_seconds  # Передаем уже в секундах
 )
 
-# Для тестов лучше сразу поставить маленькую модель: qwen2.5-7b
-# Если оставите 35B — будет очень медленно и часто таймауты
-MODEL_NAME = "qwen2.5-7b"  # <-- замените на эту модель для стабильных тестов
+# Для тестов лучше использовать лёгкую модель.
+# Если оставить 35B, даже 20 минут может не хватить на длинные тексты.
+MODEL_NAME = "qwen2.5-7b"
+
 def get_zero_shot_prompt(task: str) -> str:
     if task == "classify":
         return (
@@ -27,6 +31,7 @@ def get_zero_shot_prompt(task: str) -> str:
         )
     else:
         raise ValueError(f"Неизвестная задача: {task}")
+
 def call_model(user_text: str, system_instruction: str) -> dict | None:
     try:
         response = client.chat.completions.create(
@@ -35,7 +40,7 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.0,   # Детерминированный вывод
+            temperature=0.0,
             top_p=1.0,
             max_tokens=256,
             stream=False
@@ -52,9 +57,11 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
     except Exception as e:
         print(f"[Критическая ошибка API] {type(e).__name__}: {e}")
         return None
+
 def process_csv_batch(input_file: str, output_file: str, task: str):
     system_prompt = get_zero_shot_prompt(task)
     print(f"--- Начало обработки: {input_file} -> {output_file} (Задача: {task}) ---")
+    print(f"(Таймаут установлен: {TIMEOUT_MINUTES} минут)")
     with open(input_file, 'r', encoding='utf-8') as f_in, \
             open(output_file, 'w', encoding='utf-8', newline='') as f_out:
         reader = csv.reader(f_in)
@@ -63,7 +70,7 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
         for i, row in enumerate(reader):
             if not row or not row[0]:
                 continue
-            text = row[0]  # <-- исправлено: берём первый столбец, а не всю строку
+            text = row[0]  # Берём первый столбец
             print(f"[{i+1}] Обработка строки... (текст: '{text[:40]}...')")
             result = call_model(text, system_prompt)
             if result:
