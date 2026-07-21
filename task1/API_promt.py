@@ -5,12 +5,14 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
 # --- КОНФИГУРАЦИЯ ---
+# Убедитесь, что IP-адрес и порт совпадают с настройками LM Studio
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "lm-studio"
+# Если модель 35B будет выдавать пустой ответ или висеть, замените на "qwen2.5-7b" или "qwen/qwen3.6-27b"
 MODEL = "qwen/qwen3.6-35b-a3b"
 
 # Параметры генерации
-MAX_TOKENS = 500          # Увеличенный лимит для компенсации токенов рассуждений
+MAX_TOKENS = 500          # Лимит токенов
 TEMPERATURE = 0.0         # Детерминированный вывод (важно для JSON)
 TOP_P = 1.0
 MAX_RETRIES = 3
@@ -21,8 +23,9 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=3600)
 
 def get_prompt(task: str) -> str:
     """
-    Возвращает жесткий системный промпт без примеров (Few-shot).
-    Это критически важно для получения чистого JSON без лишнего текста.
+    Возвращает жесткий системный промпт.
+    Никаких примеров (Few-shot), никаких вежливых вступлений.
+    Только инструкция формата.
     """
     if task == "summarize":
         return (
@@ -47,11 +50,13 @@ def get_prompt(task: str) -> str:
 
 def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]:
     """
-    Исправленная функция с корректной обработкой структуры ответа openai v1.x+.
+    Выполняет запрос к модели с повторными попытками при сетевых ошибках.
+    Исправлена обработка структуры ответа для openai v1.x+.
     """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             print(f"[Попытка {attempt}] Отправка запроса к модели {MODEL}...")
+
             resp = client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
@@ -59,20 +64,21 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
                 top_p=TOP_P,
                 max_tokens=MAX_TOKENS,
                 stream=False,
-                stop=["\n\n", "\n\n\n"]  # Останавливаем генерацию, если модель начинает писать лишнее
+                # Стоп-токены: если модель начнет писать новую строку после JSON, мы остановимся
+                stop=["\n\n", "\n\n\n"]
             )
 
-            # --- ИСПРАВЛЕНИЕ ОШИБКИ ATTRIBUTEERROR ---
-            # Проверяем, что choices существует и не пуст
+            # Проверка на наличие ответа
             if not resp.choices or len(resp.choices) == 0:
-                print("[Ошибка] В ответе сервера нет choices.")
+                print("[Ошибка] В ответе нет choices.")
                 return None
 
-            # Берем первый элемент списка choices
+            # --- ИСПРАВЛЕНИЕ ОШИБКИ ---
+            # Раньше здесь было: choice = resp.choices (это список)
+            # Теперь берем первый элемент списка:
             choice = resp.choices
 
-            # В openai v1.x choice.message - это объект, у которого есть .content
-            # Явная проверка наличия атрибутов предотвращает краш
+            # Проверка структуры ответа (защита от AttributeError)
             if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
                 content = choice.message.content
             else:
@@ -81,10 +87,9 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
 
             # Проверка на пустой контент (частая проблема с reasoning_content)
             if not content or content.strip() == "":
-                print("[ВНИМАНИЕ] Поле 'content' пустое. Модель могла сгенерировать только рассуждения (reasoning).")
+                print("[ВНИМАНИЕ] Поле 'content' пустое. Модель могла сгенерировать только рассуждения.")
                 usage = resp.usage
                 print(f"[Статистика токенов] Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}")
-                # Возвращаем None, чтобы основной цикл понял, что ответа нет
                 return None
             print("[Успех] Ответ получен.")
             return content.strip()
@@ -92,12 +97,14 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
             err_name = type(e).__name__
             err_str = str(e)
             print(f"[Ошибка] Тип: {err_name}, Сообщение: {err_str}")
-            # Повторяем только при сетевых ошибках
+
+            # Логика повторных попыток только для сетевых проблем
             if "ConnectionError" in err_name or "connection" in err_str.lower() or "ReadTimeoutError" in err_name:
                 if attempt < MAX_RETRIES:
                     print(f"Ожидание {RETRY_DELAY} сек перед повторной попыткой...")
                     time.sleep(RETRY_DELAY)
                     continue
+            # Если это не сетевая ошибка или попытки кончились - выходим
             return None
     return None
 
@@ -126,15 +133,15 @@ def process_task(task_type: str, user_input: str) -> Optional[str]:
     else:
         print("[FAIL] Не удалось получить валидный ответ от модели.")
         return None
+
 if __name__ == "__main__":
     # --- ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ ---
-    # 1. Быстрый тест (классификация)
-    # Используем короткий текст, чтобы минимизировать время генерации на тяжелой модели 35B
+    # Пример 1: Классификация (быстрый тест)
     test_text = "Фильм был потрясающим, я смеялся и плакал одновременно."
     process_task("classify", test_text)
-    # 2. Пример для извлечения сущностей (раскомментируйте для теста)
+    # Пример 2: Извлечение сущностей (раскомментируйте для теста)
     # entity_text = "Иван Петров из компании ООО 'Вектор' встретился с Марией Сидоровой в Москве 15 мая."
     # process_task("extract_entities", entity_text)
-    # 3. Пример для суммаризации (раскомментируйте для теста)
+    # Пример 3: Суммаризация (раскомментируйте для теста)
     # sum_text = "Сегодня был солнечный день. Мы пошли в парк. Там было много людей и собак."
     # process_task("summarize", sum_text)
