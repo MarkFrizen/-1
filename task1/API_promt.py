@@ -135,8 +135,11 @@ def read_csv(path: str) -> List[str]:
     raise RuntimeError("Не удалось прочитать CSV ни с одной кодировкой.")
 
 def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]:
-    """Простой retry с задержкой. Возвращает content или None при ошибке."""
+    """Retry с растущим таймаутом на каждый запрос и задержкой между попытками."""
+    base_timeout = 60
     for attempt in range(1, MAX_RETRIES + 1):
+        # Таймаут растёт с каждой попыткой: 60, 120, 180…
+        current_timeout = base_timeout * attempt
         try:
             resp = client.chat.completions.create(
                 model=MODEL,
@@ -144,12 +147,15 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
                 temperature=TEMPERATURE,
                 top_p=TOP_P,
                 max_tokens=200,
+                timeout=current_timeout,  # <-- передаём растущий таймаут
             )
             return resp.choices[0].message.content
         except Exception as e:
             print(f"[Попытка {attempt}/{MAX_RETRIES}] Ошибка: {e}")
             if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY * attempt)
+                delay = RETRY_DELAY * attempt
+                print(f"  Ждём {delay} сек перед следующей попыткой...")
+                time.sleep(delay)
     return None
 
 def parse_json_strict(content: Optional[str]) -> Dict[str, Any]:
