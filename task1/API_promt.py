@@ -8,7 +8,6 @@ from openai.types.chat import ChatCompletionMessageParam
 import httpx
 
 # ==================== НАСТРОЙКИ ====================
-
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
 MODEL = "qwen/qwen3.6-35b-a3b"
