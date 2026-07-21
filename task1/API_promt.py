@@ -1,147 +1,101 @@
-import time
 import json
-from typing import List, Optional
+import csv
 from openai import OpenAI
-from openai.types.chat import ChatCompletionMessageParam
 
 # --- КОНФИГУРАЦИЯ ---
-# Убедитесь, что IP-адрес и порт совпадают с настройками LM Studio
-BASE_URL = "http://192.168.8.11:1234/v1"
-API_KEY = "lm-studio"
-# Если модель 35B будет выдавать пустой ответ или висеть, замените на "qwen2.5-7b" или "qwen/qwen3.6-27b"
-MODEL = "qwen/qwen3.6-35b-a3b"
+# Подключаемся к локальному серверу LM Studio
+client = OpenAI(
+    base_url="http://192.168.8.11:1234/v1",
+    api_key="lm-studio",
+    timeout=60
+)
 
-# Параметры генерации
-MAX_TOKENS = 500          # Лимит токенов
-TEMPERATURE = 0.0         # Детерминированный вывод (важно для JSON)
-TOP_P = 1.0
-MAX_RETRIES = 3
-RETRY_DELAY = 2.0
+MODEL_NAME = "qwen/qwen3.6-35b-a3b"  # Или замените на qwen2.5-7b для скорости
 
-# Инициализация клиента
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=3600)
-
-def get_prompt(task: str) -> str:
+def get_zero_shot_prompt(task: str) -> str:
     """
-    Возвращает жесткий системный промпт.
-    Никаких примеров (Few-shot), никаких вежливых вступлений.
-    Только инструкция формата.
+    Zero-Shot промпт: только инструкция, без примеров.
+    Это учит модель следовать формату исключительно на основе текста инструкции.
     """
-    if task == "summarize":
+    if task == "classify":
         return (
-            "Ты возвращаешь ТОЛЬКО валидный JSON объект. Никаких пояснений, "
-            "никакого текста до или после JSON. Никаких markdown блоков (```json). "
-            "Только сырой JSON. Формат: {\"summary\": \"краткое содержание\", \"keywords\": [\"слово1\"]}"
+            "Ты классификатор тональности. Проанализируй текст и верни ТОЛЬКО валидный JSON. "
+            "Никаких пояснений, никакого markdown (```json). Только сырой JSON.\n"
+            "Формат: {\"sentiment\": \"positive|negative|neutral\", \"confidence\": число от 0 до 1}"
         )
-    elif task == "extract_entities":
+    elif task == "extract":
         return (
-            "Ты возвращаешь ТОЛЬКО валидный JSON объект. Никаких пояснений. "
-            "Никаких markdown блоков. Только сырой JSON. "
-            "Формат: {\"persons\": [], \"organizations\": [], \"locations\": [], \"dates\": []}"
-        )
-    elif task == "classify":
-        return (
-            "Ты возвращаешь ТОЛЬКО валидный JSON объект. Никаких пояснений. "
-            "Никаких markdown блоков. Только сырой JSON. "
-            "Формат: {\"sentiment\": \"positive/negative/neutral\", \"confidence\": 0.0}"
+            "Ты извлектель сущностей. Проанализируй текст и верни ТОЛЬКО валидный JSON. "
+            "Никаких пояснений, никакого markdown. Только сырой JSON.\n"
+            "Формат: {\"persons\": [\"Имя Фамилия\"], \"locations\": [\"Город\"], \"organizations\": [\"Название\"]}"
         )
     else:
         raise ValueError(f"Неизвестная задача: {task}")
 
-def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]:
+def call_model(user_text: str, system_instruction: str) -> dict | None:
     """
-    Выполняет запрос к модели с повторными попытками при сетевых ошибках.
-    Исправлена обработка структуры ответа для openai v1.x+.
+    Базовый вызов API с обработкой ошибок и подсчетом токенов.
     """
-    for attempt in range(1, MAX_RETRIES + 1):
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_text}
+            ],
+            temperature=0.0,   # Детерминированный вывод (важно для JSON)
+            top_p=1.0,
+            max_tokens=256     # Ограничиваем токены для экономии и скорости
+        )
+
+        # Получаем ответ (исправленная структура для openai v1.x+)
+        content = response.choices.message.content
+
+        # Пытаемся распарсить JSON сразу здесь, чтобы вернуть готовый объект
         try:
-            print(f"[Попытка {attempt}] Отправка запроса к модели {MODEL}...")
-
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-                max_tokens=MAX_TOKENS,
-                stream=False,
-                # Стоп-токены: если модель начнет писать новую строку после JSON, мы остановимся
-                stop=["\n\n", "\n\n\n"]
-            )
-
-            # Проверка на наличие ответа
-            if not resp.choices or len(resp.choices) == 0:
-                print("[Ошибка] В ответе нет choices.")
-                return None
-
-            # --- ИСПРАВЛЕНИЕ ОШИБКИ ---
-            # Раньше здесь было: choice = resp.choices (это список)
-            # Теперь берем первый элемент списка:
-            choice = resp.choices
-
-            # Проверка структуры ответа (защита от AttributeError)
-            if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
-                content = choice.message.content
-            else:
-                print("[Ошибка] Неожиданная структура ответа от API.")
-                return None
-
-            # Проверка на пустой контент (частая проблема с reasoning_content)
-            if not content or content.strip() == "":
-                print("[ВНИМАНИЕ] Поле 'content' пустое. Модель могла сгенерировать только рассуждения.")
-                usage = resp.usage
-                print(f"[Статистика токенов] Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}")
-                return None
-            print("[Успех] Ответ получен.")
-            return content.strip()
-        except Exception as e:
-            err_name = type(e).__name__
-            err_str = str(e)
-            print(f"[Ошибка] Тип: {err_name}, Сообщение: {err_str}")
-
-            # Логика повторных попыток только для сетевых проблем
-            if "ConnectionError" in err_name or "connection" in err_str.lower() or "ReadTimeoutError" in err_name:
-                if attempt < MAX_RETRIES:
-                    print(f"Ожидание {RETRY_DELAY} сек перед повторной попыткой...")
-                    time.sleep(RETRY_DELAY)
-                    continue
-            # Если это не сетевая ошибка или попытки кончились - выходим
-            return None
-    return None
-
-def process_task(task_type: str, user_input: str) -> Optional[str]:
-    """
-    Основная функция обработки задачи.
-    """
-    system_prompt = get_prompt(task_type)
-    messages: List[ChatCompletionMessageParam] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_input}
-    ]
-    print(f"\n--- Запуск задачи: {task_type} ---")
-    print(f"Входные данные: {user_input[:100]}{'...' if len(user_input) > 100 else ''}")
-    response = call_with_retry(messages)
-    if response:
-        print(f"[Raw Response] {response}")
-        # Попытка распарсить JSON для проверки валидности
-        try:
-            json_obj = json.loads(response)
-            print("[Статус] Ответ является валидным JSON.")
-            return response
+            return json.loads(content)
         except json.JSONDecodeError:
-            print("[Предупреждение] Ответ не является валидным JSON. Возможно, модель проигнорировала инструкции.")
-            return response
-    else:
-        print("[FAIL] Не удалось получить валидный ответ от модели.")
+            print(f"[Ошибка парсинга] Модель вернула не JSON:\n{content}")
+            return None
+    except Exception as e:
+        print(f"[Критическая ошибка API] {type(e).__name__}: {e}")
         return None
 
+def process_csv_batch(input_file: str, output_file: str, task: str):
+    """
+    Массовая обработка: читает CSV, вызывает модель, пишет результат.
+    """
+    system_prompt = get_zero_shot_prompt(task)
+    print(f"--- Начало обработки: {input_file} -> {output_file} (Задача: {task}) ---")
+    with open(input_file, 'r', encoding='utf-8') as f_in, \
+            open(output_file, 'w', encoding='utf-8', newline='') as f_out:
+        reader = csv.reader(f_in)
+        writer = csv.writer(f_out)
+
+        # Пишем заголовок
+        writer.writerow(["original_text", "result_json", "status"])
+        for i, row in enumerate(reader):
+            if not row: continue
+            text = row
+            print(f"[{i+1}] Обработка строки... (текст: '{text[:30]}...')")
+            result = call_model(text, system_prompt)
+            if result:
+                # Превращаем словарь обратно в строку для CSV
+                json_str = json.dumps(result, ensure_ascii=False)
+                writer.writerow([text, json_str, "OK"])
+                print(f"  -> OK: {result}")
+            else:
+                writer.writerow([text, "", "FAIL"])
+                print("  -> FAIL: Не удалось получить валидный ответ")
+
 if __name__ == "__main__":
-    # --- ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ ---
-    # Пример 1: Классификация (быстрый тест)
+    # === ВАРИАНТ 1: Быстрый тест (Zero-Shot) ===
+    # Запустите это сначала, чтобы проверить связь с API и формат ответа
     test_text = "Фильм был потрясающим, я смеялся и плакал одновременно."
-    process_task("classify", test_text)
-    # Пример 2: Извлечение сущностей (раскомментируйте для теста)
-    # entity_text = "Иван Петров из компании ООО 'Вектор' встретился с Марией Сидоровой в Москве 15 мая."
-    # process_task("extract_entities", entity_text)
-    # Пример 3: Суммаризация (раскомментируйте для теста)
-    # sum_text = "Сегодня был солнечный день. Мы пошли в парк. Там было много людей и собак."
-    # process_task("summarize", sum_text)
+    prompt = get_zero_shot_prompt("classify")
+    print("--- Тестовый запуск (Zero-Shot) ---")
+    result = call_model(test_text, prompt)
+    if result:
+        print(f"Успех! Результат: {result}")
+    else:
+        print("Не удалось получить ответ. Проверьте LM Studio и модель.")
