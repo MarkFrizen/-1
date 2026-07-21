@@ -11,10 +11,7 @@ client = OpenAI(
     api_key="lm-studio",
     timeout=timeout_seconds  # Передаем уже в секундах
 )
-
-# Для тестов лучше использовать лёгкую модель.
-# Если оставить 35B, даже 20 минут может не хватить на длинные тексты.
-MODEL_NAME = "qwen2.5-7b"
+MODEL_NAME = "qwen/qwen3.6-35b-a3b"
 
 def get_zero_shot_prompt(task: str) -> str:
     if task == "classify":
