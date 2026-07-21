@@ -46,10 +46,6 @@ def get_prompt(task: str) -> str:
         raise ValueError(f"Неизвестная задача: {task}")
 
 def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]:
-    """
-    Выполняет запрос к модели с повторными попытками при сетевых ошибках.
-    Возвращает только content. Для отладки печатает полный ответ в случае ошибки.
-    """
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             print(f"[Попытка {attempt}] Отправка запроса к модели {MODEL}...")
@@ -60,18 +56,24 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
                 top_p=TOP_P,
                 max_tokens=MAX_TOKENS,
                 stream=False,
-                # Стоп-токены: если модель начнет писать новую строку после JSON, мы остановимся
                 stop=["\n\n", "\n\n\n"]
             )
-            # Проверка на наличие ответа
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+            # В новых версиях openai resp.choices - это список объектов CompletionChoice
             if not resp.choices or len(resp.choices) == 0:
                 print("[Ошибка] В ответе нет choices.")
                 return None
-            content = resp.choices.message.content
-            # Если контент пустой, но модель что-то сгенерировала (например, ушла в reasoning_content)
+            # Получаем первый выбор
+            choice = resp.choices
+            # В новых версиях у choice есть атрибут .message, который является объектом ChatCompletionMessage
+            # Но для безопасности проверяем наличие атрибута
+            if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
+                content = choice.message.content
+            else:
+                # Фолбэк: если структура странная, пробуем достать контент напрямую (редко, но бывает)
+                content = getattr(choice, 'content', None)
             if not content or content.strip() == "":
                 print("[ВНИМАНИЕ] Поле 'content' пустое. Модель могла сгенерировать только рассуждения.")
-                # Выводим статистику токенов для понимания ситуации
                 usage = resp.usage
                 print(f"[Статистика] Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}")
                 return None
@@ -81,16 +83,14 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
             err_name = type(e).__name__
             err_str = str(e)
             print(f"[Ошибка] Тип: {err_name}, Сообщение: {err_str}")
-            # Логика повторных попыток только для сетевых проблем
             if "ConnectionError" in err_name or "connection" in err_str.lower() or "ReadTimeoutError" in err_name:
                 if attempt < MAX_RETRIES:
                     print(f"Ожидание {RETRY_DELAY} сек перед повторной попыткой...")
                     time.sleep(RETRY_DELAY)
                     continue
-            # Если это не сетевая ошибка или попытки кончились - выходим
-            # Для отладки полезно видеть, что именно вернула модель, если библиотека выбросила исключение
             return None
     return None
+
 
 def process_task(task_type: str, user_input: str) -> Optional[str]:
     """
