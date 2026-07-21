@@ -3,14 +3,13 @@ import csv
 from openai import OpenAI
 
 # --- КОНФИГУРАЦИЯ ---
-# Подключаемся к локальному серверу LM Studio
 client = OpenAI(
     base_url="http://192.168.8.11:1234/v1",
     api_key="lm-studio",
     timeout=60
 )
 
-MODEL_NAME = "qwen/qwen3.6-35b-a3b"  # Или замените на qwen2.5-7b для скорости
+MODEL_NAME = "qwen/qwen3.6-35b-a3b"
 
 def get_zero_shot_prompt(task: str) -> str:
     """
@@ -48,7 +47,7 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
             max_tokens=256     # Ограничиваем токены для экономии и скорости
         )
 
-        # Получаем ответ (исправленная структура для openai v1.x+)
+        # Получаем ответ
         content = response.choices.message.content
 
         # Пытаемся распарсить JSON сразу здесь, чтобы вернуть готовый объект
