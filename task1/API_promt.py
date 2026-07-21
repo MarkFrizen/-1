@@ -9,9 +9,9 @@ import httpx
 
 # ==================== НАСТРОЙКИ ====================
 
-BASE_URL = "http://192.168.0.140:1234/v1"
+BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
-MODEL = "qwen/qwen3.6-27b"
+MODEL = "qwen/qwen3.6-35b-a3b"
 TEMPERATURE = 0.1
 TOP_P = 0.5
 TASK = "summarize"
