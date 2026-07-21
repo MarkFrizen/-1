@@ -1,86 +1,125 @@
 import csv
 import json
 import time
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
-import httpx
 
-# ==================== НАСТРОЙКИ ====================
+# ================= НАСТРОЙКИ =================
 BASE_URL = "http://192.168.8.11:1234/v1"
 API_KEY = "not-needed"
 MODEL = "qwen/qwen3.6-35b-a3b"
+# Параметры генерации: низкая температура для стабильности, top_p ограничивает «разброс»
 TEMPERATURE = 0.1
 TOP_P = 0.5
-TASK = "summarize"
+TASK = "summarize"  # варианты: "summarize", "extract_entities", "classify"
 INPUT_FILE = "input.csv"
 OUTPUT_FILE = "output.csv"
-MAX_RETRIES = 5
-RETRY_DELAY_SECONDS = 3
-TIMEOUT_SECONDS = 300
-# ===================================================
+MAX_RETRIES = 3
+RETRY_DELAY = 2
+# =============================================
 
-client = OpenAI(
-    base_url=BASE_URL,
-    api_key=API_KEY,
-    timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=10.0)
-)
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=60)
 
-def get_system_prompt(task: str) -> str:
+def get_prompt(task: str) -> str:
     """
-    Возвращает системный промпт для выбранной задачи.
-    Промпт жёстко требует от модели возвращать только JSON,
-    чтобы упростить парсинг.
+    Возвращает промпт с Zero-shot + Few-shot + Chain-of-Thought.
+    Модель получает чёткую роль, примеры (Few-shot), инструкцию по шагам (CoT)
+    и строгое требование вернуть только валидный JSON.
     """
+    # Chain-of-Thought для суммаризации
+    cot_summarize = """
+Chain-of-Thought (пошаговые рассуждения):
+1. Прочитай входной текст целиком и выдели 3 самых важных факта: кто/что участвует, что произошло, где/когда это случилось.
+2. На основе этих 3 фактов сформулируй одно предложение, которое передаёт главную суть текста (не больше 20–25 слов).
+3. Извлеки из текста 3–5 ключевых слов, которые лучше всего описывают содержание (имена, названия, темы, локации).
+4. Проверь, что в ключевых словах нет повторов и они действительно отражают суть.
+5. Собери результат строго по шаблону JSON ниже, без каких‑либо комментариев до или после него.
+6. Убедись, что внутри JSON нет Markdown-разметки (без ```json, без кавычек вокруг всего блока).
+7. Если в тексте нет достаточной информации для выделения 3 фактов, сформулируй резюме на основе 1–2 самых значимых.
+"""
+    # Chain-of-Thought для извлечения сущностей
+    cot_extract = """
+Chain-of-Thought (пошаговые рассуждения):
+1. Прочитай текст и последовательно пройдись по каждому предложению, отмечая упоминания людей. Собери их в список "persons" (только полные имена, без титулов и должностей).
+2. Найди названия компаний, организаций, учреждений и добавь их в "organizations" (без общих слов вроде «компания», «фирма»).
+3. Выпиши все локации (города, страны, улицы, здания) в список "locations".
+4. Найди упоминания дат, дней недели, временных периодов и запиши их в "dates" в том виде, как они указаны в тексте (не перефразируй).
+5. Проверь каждый элемент на соответствие своей категории; если есть сомнения — не добавляй.
+6. Если для какой‑то категории сущностей не найдено, оставь соответствующий список пустым (например, "persons": []).
+7. Сформируй итоговый JSON строго по шаблону, без пояснений и без Markdown-блоков.
+8. Убедись, что все списки содержат только строки и не содержат вложенных структур.
+"""
+    # Chain-of-Thought для классификации тональности
+    cot_classify = """
+Chain-of-Thought (пошаговые рассуждения):
+1. Прочитай текст и определи общий эмоциональный окрас: явно позитивный, явно негативный или нейтральный.
+2. Обрати внимание на слова с эмоциональной окраской, усилители (очень, крайне, совершенно), отрицания и контекст.
+3. Если в тексте есть противоречивые сигналы (и позитив, и негатив), оцени, какой из них доминирует по смыслу и силе выражения.
+4. Определи уровень уверенности в своём выводе по шкале от 0.0 до 1.0:
+   - 0.9–1.0 — однозначная тональность без противоречий;
+   - 0.7–0.89 — преобладает один тон, но есть небольшие контраргументы;
+   - 0.5–0.69 — смешанные сигналы, сложно однозначно отнести к одной категории;
+   - ниже 0.5 — почти невозможно определить, либо тон очень слабый.
+5. Запиши выбранную тональность как "positive", "negative" или "neutral".
+6. Запиши confidence как число с плавающей точкой (например, 0.85).
+7. Собери финальный JSON строго по шаблону, не добавляя никаких пояснений.
+"""
     if task == "summarize":
-        return """
-Ты — строгий JSON-генератор. Твоя задача — вернуть ТОЛЬКО валидный JSON-объект.
-НИКАКИХ пояснений, никаких слов до или после JSON, никаких Markdown-блоков.
+        return f"""
+Ты — строгий JSON-генератор для суммаризации. Твоя задача — вернуть ТОЛЬКО валидный JSON-объект без пояснений, без Markdown-блоков, без лишних слов.
+{cot_summarize}
+Few-shot (примеры):
+Текст: «Компания открыла новый завод в Сибири. Производство начнётся в октябре. Ожидается 200 новых рабочих мест.»
+Ответ: {{"summary": "Компания открывает новый завод в Сибири с запуском в октябре и созданием 200 рабочих мест.", "keywords": ["завод", "Сибирь", "производство", "рабочие места"]}}
+Текст: «Конференция по ИИ прошла в Москве. Выступили 15 спикеров. Обсуждали этику ИИ и регулирование.»
+Ответ: {{"summary": "В Москве прошла конференция по ИИ с участием 15 спикеров, где обсуждали этику и регулирование ИИ.", "keywords": ["ИИ", "конференция", "Москва", "этика", "регулирование"]}}
 Формат ответа:
-{
+{{
   "summary": "одно предложение с сутью текста",
   "keywords": ["ключевое слово 1", "ключевое слово 2"]
-}
-Цепочка рассуждений:
-1. Выпиши 3 главных факта из текста.
-2. Сформулируй резюме на их основе.
-3. Сформируй список из 3-5 ключевых слов.
-4. Оберни результат в JSON строго по шаблону выше.
-ВАЖНО: Если ты добавишь хоть один символ вне фигурных скобок, задача считается проваленной.
+}}
+ВАЖНО: Не добавляй ни одного символа вне фигурных скобок. Только JSON.
 """
     elif task == "extract_entities":
-        return """
-Ты — система распознавания именованных сущностей. Верни ТОЛЬКО корректный JSON-объект.
-Никаких пояснений, никакого текста до или после JSON.
-Формат JSON:
-{
-  "persons": ["Иван Петров"],
-  "organizations": ["Рога и копыта"],
-  "locations": ["Москва"],
-  "dates": ["вчера"]
-}
-Извлеки сущности строго по этим категориям. Не выдумывай несуществующие сущности.
+        return f"""
+Ты — система извлечения сущностей. Верни ТОЛЬКО корректный JSON-объект. Никаких пояснений.
+{cot_extract}
+Few-shot:
+Текст: «Иван Петров из компании Рога и копыта приехал из Москвы вчера.»
+Ответ: {{"persons": ["Иван Петров"], "organizations": ["Рога и копыта"], "locations": ["Москва"], "dates": ["вчера"]}}
+Формат:
+{{
+  "persons": [],
+  "organizations": [],
+  "locations": [],
+  "dates": []
+}}
+Только JSON, без пояснений.
 """
     elif task == "classify":
-        return """
-Ты — классификатор тональности. Верни ТОЛЬКО корректный JSON-объект.
-Никаких пояснений, никакого текста до или после JSON.
-Формат JSON:
-{
+        return f"""
+Ты — классификатор тональности. Верни ТОЛЬКО JSON. Без пояснений.
+{cot_classify}
+Few-shot:
+Текст: «Отличный сервис, всё быстро и удобно.»
+Ответ: {{"sentiment": "positive", "confidence": 0.95}}
+
+Текст: «Ужасно медленно, ничего не работает.»
+Ответ: {{"sentiment": "negative", "confidence": 0.98}}
+
+Формат:
+{{
   "sentiment": "positive/negative/neutral",
   "confidence": 0.0
-}
-Confidence должен быть числом от 0.0 до 1.0.
+}}
+Только JSON.
 """
     else:
         raise ValueError(f"Неизвестная задача: {task}")
 
-def read_texts_from_csv(path: str) -> List[str]:
-    """
-    Читает CSV-файл, извлекает тексты из колонки 'text'.
-    Пробует несколько кодировок, чтобы избежать ошибок с кириллицей.
-    """
+def read_csv(path: str) -> List[str]:
+    """Читает колонку 'text' из CSV, пробуя несколько кодировок."""
     encodings = ["utf-8-sig", "cp1251", "utf-8"]
     for enc in encodings:
         try:
@@ -88,242 +127,128 @@ def read_texts_from_csv(path: str) -> List[str]:
                 reader = csv.DictReader(f)
                 if reader.fieldnames is None or "text" not in reader.fieldnames:
                     continue
-                texts = []
-                for row in reader:
-                    t = row.get("text", "")
-                    if t and t.strip():
-                        texts.append(t.strip())
-                print(f"Файл прочитан с кодировкой {enc}, количество текстов: {len(texts)}")
+                texts = [row["text"].strip() for row in reader if row.get("text", "").strip()]
+                print(f"Прочитано текстов: {len(texts)} (кодировка {enc})")
                 return texts
-        except (UnicodeDecodeError, KeyError, FileNotFoundError):
+        except Exception:
             continue
-    raise RuntimeError("Не удалось прочитать файл ни с одной из кодировок.")
+    raise RuntimeError("Не удалось прочитать CSV ни с одной кодировкой.")
 
-def call_llm_with_retry(
-        messages: List[ChatCompletionMessageParam],
-        model: str,
-        temperature: float,
-        top_p: float,
-        max_tokens: int,
-) -> Tuple[Optional[str], int]:
-    """
-    Отправляет запрос к модели с повторными попытками при ошибках.
-    При каждой следующей попытке таймаут увеличивается,
-    чтобы дать серверу больше времени, если он перегружен.
-    """
-    last_exc: Optional[Exception] = None
+def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]:
+    """Простой retry с задержкой. Возвращает content или None при ошибке."""
     for attempt in range(1, MAX_RETRIES + 1):
-        current_timeout = TIMEOUT_SECONDS * attempt
         try:
-            print(f"   Попытка {attempt}/{MAX_RETRIES} (таймаут {current_timeout}с)...")
-            response = client.chat.completions.create(
-                model=model,
+            resp = client.chat.completions.create(
+                model=MODEL,
                 messages=messages,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                timeout=current_timeout,
+                temperature=TEMPERATURE,
+                top_p=TOP_P,
+                max_tokens=200,
             )
-            content = response.choices[0].message.content
-            tokens = response.usage.total_tokens
-            return content, tokens
+            return resp.choices[0].message.content
         except Exception as e:
-            last_exc = e
-            print(f"   Попытка {attempt}/{MAX_RETRIES} не удалась: {e}")
+            print(f"[Попытка {attempt}/{MAX_RETRIES}] Ошибка: {e}")
             if attempt < MAX_RETRIES:
-                delay = RETRY_DELAY_SECONDS * attempt
-                print(f"   Ожидание {delay} сек перед следующей попыткой...")
-                time.sleep(delay)
-    print(f"Все попытки исчерпаны. Последняя ошибка: {last_exc}")
-    return None, 0
+                time.sleep(RETRY_DELAY * attempt)
+    return None
 
-def parse_json_safe(content: Optional[str]) -> Dict[str, Any]:
+
+def parse_json_strict(content: Optional[str]) -> Dict[str, Any]:
     """
-    Пытается извлечь валидный JSON из ответа модели.
-    Сначала пробует прямой парсинг, затем ищет JSON-блок с помощью регулярного выражения,
-    а также проверяет наличие Markdown-блока ```json ... ```.
-    Возвращает словарь с ключами 'data' или 'error',
-    а также 'raw'.
+    Строгий парсинг JSON. Если не валидный JSON — возвращаем ошибку.
+    Никаких регулярных выражений: либо чистый JSON, либо ошибка.
     """
+    result = {"data": None, "error": None, "raw": content or ""}
     if not content:
-        return {"error": "Нет ответа от модели", "raw": "", "data": None}
-    raw_response = content
+        result["error"] = "Нет ответа от модели"
+        return result
     try:
         data = json.loads(content)
         if isinstance(data, dict):
-            return {"data": data, "raw": raw_response, "error": None}
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{[\s\S]*\}", content)
-    if match:
-        json_str = match.group(0)
-        try:
-            data = json.loads(json_str)
-            if isinstance(data, dict):
-                return {"data": data, "raw": raw_response, "error": None}
-        except Exception:
-            pass
-    code_block_match = re.search(r"```json\s*([\s\S]*?)```", content)
-    if code_block_match:
-        json_str = code_block_match.group(1).strip()
-        try:
-            data = json.loads(json_str)
-            if isinstance(data, dict):
-                return {"data": data, "raw": raw_response, "error": None}
-        except Exception:
-            pass
-    return {"error": "Не удалось распарсить JSON", "raw": raw_response, "data": None}
+            result["data"] = data
+        else:
+            result["error"] = "JSON не является объектом (dict)"
+    except json.JSONDecodeError as e:
+        result["error"] = f"Невалидный JSON: {e}"
+    return result
 
-def get_max_tokens_for_task(task: str) -> int:
-    """
-    Возвращает разумное ограничение на количество генерируемых токенов
-    в зависимости от задачи. Это помогает ускорить ответ, так как модель
-    не тратит время на генерацию лишнего текста.
-    """
-    if task == "summarize":
-        return 150
-    elif task == "extract_entities":
-        return 200
-    elif task == "classify":
-        return 50
-    else:
-        return 200
 
 def main():
-    """
-    Основная функция:
-      - читает входной CSV,
-      - для каждого текста формирует запрос,
-      - вызывает модель с повторными попытками,
-      - парсит JSON-ответ,
-      - сохраняет все результаты в выходной CSV.
-    """
-    start_time = time.time()
-    try:
-        texts = read_texts_from_csv(INPUT_FILE)
-    except RuntimeError as e:
-        print(f"Ошибка чтения файла: {e}")
-        return
+    texts = read_csv(INPUT_FILE)
     if not texts:
         print("Нет текстов для обработки.")
-        base_fields = ["id", "original"]
-        if TASK == "summarize":
-            fieldnames = base_fields + ["summary", "keywords", "tokens", "error", "raw_response"]
-        elif TASK == "extract_entities":
-            fieldnames = base_fields + ["persons", "organizations", "locations", "dates", "tokens", "error", "raw_response"]
-        elif TASK == "classify":
-            fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error", "raw_response"]
-        else:
-            fieldnames = base_fields + ["tokens", "error", "raw_response"]
-        with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
         return
-    system_prompt = get_system_prompt(TASK)
-    max_tokens = get_max_tokens_for_task(TASK)
-    results: List[Dict[str, Any]] = []
+    system_prompt = get_prompt(TASK)
+    results = []
     total_tokens = 0
-    for idx, text in enumerate(texts):
-        print(f"\nОбработка {idx+1}/{len(texts)}... (длина текста: {len(text)} симв.)")
-        user_prompt = f"Текст для анализа:\n\n{text}"
+
+    for i, text in enumerate(texts, start=1):
+        print(f"\nОбработка {i}/{len(texts)}")
         messages: List[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": f"Текст для анализа:\n\n{text}"},
         ]
-        req_start = time.time()
-        content, tokens_used = call_llm_with_retry(
-            messages=messages,
-            model=MODEL,
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
-            max_tokens=max_tokens,
-        )
-        req_time = time.time() - req_start
+        content = call_with_retry(messages)
+        parsed = parse_json_strict(content)
+        data = parsed["data"]
+        error = parsed["error"]
+        raw = parsed["raw"]
+
+        # Учёт токенов: в этой простой версии берём «примерно» 200 токенов на запрос
+        tokens_used = 200
         total_tokens += tokens_used
-        parse_result = parse_json_safe(content)
-        data = parse_result["data"]
-        error_msg = parse_result["error"]
-        raw_response = parse_result["raw"]
-        if error_msg:
-            print(f"[ОТЛАДКА] Сырой ответ модели:")
-            print(raw_response[:500])
-            print("[ОТЛАДКА] Конец сырого ответа")
-        if error_msg:
-            results.append({
-                "id": idx,
-                "original": text,
-                "summary": "",
-                "keywords": "",
-                "tokens": tokens_used,
-                "error": error_msg,
-                "raw_response": raw_response
-            })
-            print(f"   Ошибка: {error_msg} (время запроса: {req_time:.2f}с)")
+        row = {
+            "id": i,
+            "original": text,
+            "tokens": tokens_used,
+            "error": error or "",
+            "raw_response": raw,
+        }
+        if error:
+            # Заполняем пустые поля для согласованности CSV
+            if TASK == "summarize":
+                row["summary"] = ""
+                row["keywords"] = ""
+            elif TASK == "extract_entities":
+                for k in ["persons", "organizations", "locations", "dates"]:
+                    row[k] = ""
+            elif TASK == "classify":
+                row["sentiment"] = ""
+                row["confidence"] = 0.0
+            results.append(row)
+            print(f"Ошибка: {error}")
             continue
+
+        # Заполняем поля в зависимости от задачи
         if TASK == "summarize":
-            summary = data.get("summary", "")
-            keywords = data.get("keywords", [])
-            if not isinstance(keywords, list):
-                keywords = []
-            results.append({
-                "id": idx,
-                "original": text,
-                "summary": summary,
-                "keywords": ", ".join(keywords),
-                "tokens": tokens_used,
-                "error": "",
-                "raw_response": raw_response
-            })
+            row["summary"] = data.get("summary", "")
+            kw = data.get("keywords", [])
+            row["keywords"] = ", ".join(kw) if isinstance(kw, list) else ""
         elif TASK == "extract_entities":
-            persons = data.get("persons", [])
-            orgs = data.get("organizations", [])
-            locs = data.get("locations", [])
-            dates = data.get("dates", [])
-            for lst in [persons, orgs, locs, dates]:
-                if not isinstance(lst, list):
-                    lst = []
-            results.append({
-                "id": idx,
-                "original": text,
-                "persons": ", ".join(persons),
-                "organizations": ", ".join(orgs),
-                "locations": ", ".join(locs),
-                "dates": ", ".join(dates),
-                "tokens": tokens_used,
-                "error": "",
-                "raw_response": raw_response
-            })
+            for k in ["persons", "organizations", "locations", "dates"]:
+                lst = data.get(k, [])
+                row[k] = ", ".join(lst) if isinstance(lst, list) else ""
         elif TASK == "classify":
-            sentiment = data.get("sentiment", "unknown")
-            confidence = data.get("confidence", 0.0)
-            if not isinstance(confidence, (int, float)):
-                confidence = 0.0
-            results.append({
-                "id": idx,
-                "original": text,
-                "sentiment": sentiment,
-                "confidence": confidence,
-                "tokens": tokens_used,
-                "error": "",
-                "raw_response": raw_response
-            })
-        print(f"   Готово (токены: {tokens_used}, время: {req_time:.2f}с)")
-    base_fields = ["id", "original"]
+            row["sentiment"] = data.get("sentiment", "unknown")
+            conf = data.get("confidence", 0.0)
+            row["confidence"] = float(conf) if isinstance(conf, (int, float)) else 0.0
+        results.append(row)
+
+    # Определяем нужные колонки для CSV
+    base_cols = ["id", "original", "tokens", "error", "raw_response"]
     if TASK == "summarize":
-        fieldnames = base_fields + ["summary", "keywords", "tokens", "error", "raw_response"]
+        fieldnames = base_cols + ["summary", "keywords"]
     elif TASK == "extract_entities":
-        fieldnames = base_fields + ["persons", "organizations", "locations", "dates", "tokens", "error", "raw_response"]
+        fieldnames = base_cols + ["persons", "organizations", "locations", "dates"]
     elif TASK == "classify":
-        fieldnames = base_fields + ["sentiment", "confidence", "tokens", "error", "raw_response"]
+        fieldnames = base_cols + ["sentiment", "confidence"]
     else:
-        fieldnames = base_fields + ["tokens", "error", "raw_response"]
+        fieldnames = base_cols
     with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
-    total_time = time.time() - start_time
-    print(f"\nГотово. Результаты сохранены в {OUTPUT_FILE}")
-    print(f"Всего токенов использовано: {total_tokens}")
-    print(f"Общее время выполнения: {total_time:.2f} секунд")
+    print(f"\nГотово. Результаты в {OUTPUT_FILE}")
+    print(f"Обработано текстов: {len(results)}, примерно токенов: {total_tokens}")
 if __name__ == "__main__":
     main()
