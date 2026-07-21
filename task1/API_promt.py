@@ -106,10 +106,8 @@ Few-shot:
 Few-shot:
 Текст: «Отличный сервис, всё быстро и удобно.»
 Ответ: {{"sentiment": "positive", "confidence": 0.95}}
-
 Текст: «Ужасно медленно, ничего не работает.»
 Ответ: {{"sentiment": "negative", "confidence": 0.98}}
-
 Формат:
 {{
   "sentiment": "positive/negative/neutral",
