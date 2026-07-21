@@ -13,7 +13,6 @@ MODEL = "qwen/qwen3.6-35b-a3b"
 # Параметры генерации: низкая температура для стабильности, top_p ограничивает «разброс»
 TEMPERATURE = 0.1
 TOP_P = 0.5
-
 TASK = "summarize"  # варианты: "summarize", "extract_entities", "classify"
 INPUT_FILE = "input.csv"
 OUTPUT_FILE = "output.csv"
