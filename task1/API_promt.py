@@ -152,7 +152,6 @@ def call_with_retry(messages: List[ChatCompletionMessageParam]) -> Optional[str]
                 time.sleep(RETRY_DELAY * attempt)
     return None
 
-
 def parse_json_strict(content: Optional[str]) -> Dict[str, Any]:
     """
     Строгий парсинг JSON. Если не валидный JSON — возвращаем ошибку.
@@ -172,7 +171,6 @@ def parse_json_strict(content: Optional[str]) -> Dict[str, Any]:
         result["error"] = f"Невалидный JSON: {e}"
     return result
 
-
 def main():
     texts = read_csv(INPUT_FILE)
     if not texts:
@@ -181,7 +179,6 @@ def main():
     system_prompt = get_prompt(TASK)
     results = []
     total_tokens = 0
-
     for i, text in enumerate(texts, start=1):
         print(f"\nОбработка {i}/{len(texts)}")
         messages: List[ChatCompletionMessageParam] = [
@@ -193,7 +190,6 @@ def main():
         data = parsed["data"]
         error = parsed["error"]
         raw = parsed["raw"]
-
         # Учёт токенов: в этой простой версии берём «примерно» 200 токенов на запрос
         tokens_used = 200
         total_tokens += tokens_used
