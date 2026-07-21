@@ -3,7 +3,7 @@ import csv
 from openai import OpenAI
 
 # --- КОНФИГУРАЦИЯ ---
-TIMEOUT_MINUTES = 5  # <-- Меняйте это число: 5, 10, 20 минут и т.д.
+TIMEOUT_MINUTES = 60 # <-- Меняйте это число: 5, 10, 20 минут и т.д.
 timeout_seconds = TIMEOUT_MINUTES * 60  # Конвертируем в секунды (библиотека openai требует секунды)
 
 client = OpenAI(
