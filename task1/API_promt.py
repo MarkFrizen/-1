@@ -40,7 +40,7 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
             ],
             temperature=0.0,
             top_p=1.0,
-            max_tokens=256,
+            max_tokens=1024,
             stream=False
         )
 
@@ -83,24 +83,53 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
     system_prompt = get_zero_shot_prompt(task)
     print(f"--- Начало обработки: {input_file} -> {output_file} (Задача: {task}) ---")
     print(f"(Таймаут установлен: {TIMEOUT_MINUTES} минут)")
-    with open(input_file, 'r', encoding='utf-8') as f_in, \
-            open(output_file, 'w', encoding='utf-8', newline='') as f_out:
+    
+    results = []
+    
+    with open(input_file, 'r', encoding='utf-8') as f_in:
         reader = csv.reader(f_in)
-        writer = csv.writer(f_out)
-        writer.writerow(["original_text", "result_json", "status"])
         for i, row in enumerate(reader):
             if not row or not row[0]:
                 continue
             text = row[0]  # Берём первый столбец
             print(f"[{i+1}] Обработка строки... (текст: '{text[:40]}...')")
             result = call_model(text, system_prompt)
+            
+            entry = {
+                "id": i + 1,
+                "text": text,
+                "status": "OK" if result else "FAIL"
+            }
+            
             if result:
-                json_str = json.dumps(result, ensure_ascii=False)
-                writer.writerow([text, json_str, "OK"])
-                print(f"  -> OK: {result}")
+                entry["prediction"] = result
             else:
-                writer.writerow([text, "", "FAIL"])
+                entry["prediction"] = None
                 print("  -> FAIL")
+            
+            results.append(entry)
+            if result:
+                if task == "classify":
+                    print(f"  -> OK: {result}")
+                elif task == "extract":
+                    print(f"  -> OK: {result}")
+    
+    # Сохраняем в JSON файл
+    output_data = {
+        "task": task,
+        "total_count": len(results),
+        "results": results
+    }
+    
+    with open(output_file, 'w', encoding='utf-8') as f_out:
+        json.dump(output_data, f_out, ensure_ascii=False, indent=2)
+    
+    print(f"\n--- Обработка завершена ---")
+    print(f"Всего обработано: {len(results)} строк")
+    print(f"Успешно: {sum(1 for r in results if r['status'] == 'OK')}")
+    print(f"Ошибок: {sum(1 for r in results if r['status'] == 'FAIL')}")
+    print(f"Результаты сохранены в: {output_file}")
+
 if __name__ == "__main__":
     # Быстрый тест
     test_text = "Фильм был потрясающим, я смеялся и плакал одновременно."
