@@ -145,3 +145,8 @@ if __name__ == "__main__":
         print("2. Неправильный URL сервера (текущий: http://192.168.8.11:1234)")
         print("3. Модель не отвечает в заданном формате JSON")
         print("4. Таймаут соединения")
+    
+    # Обработка CSV и сохранение в JSON
+    print("\n" + "="*50)
+    print("--- Обработка input.csv -> output.json ---")
+    process_csv_batch("input.csv", "output.json", "classify")
