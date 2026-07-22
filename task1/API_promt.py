@@ -17,7 +17,6 @@ client = OpenAI(
 # Имя модели, которая загружена в LM Studio
 MODEL_NAME = "qwen/qwen3.6-27b"
 
-
 def get_zero_shot_prompt(task: str) -> str:
     """
     Функция возвращает промпт для Zero-shot обучения.
@@ -48,7 +47,6 @@ def get_zero_shot_prompt(task: str) -> str:
         )
     else:
         raise ValueError(f"Неизвестная задача: {task}")
-
 
 def call_model(user_text: str, system_instruction: str) -> dict | None:
     """
@@ -108,11 +106,9 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
         except json.JSONDecodeError:
             # Если JSON некорректный, возвращаем None
             return None
-            
     except Exception as e:
         # В случае любой ошибки (сетевой, таймаут и т.д.) возвращаем None
         return None
-
 
 def process_csv_batch(input_file: str, output_file: str, task: str):
     """
@@ -130,7 +126,6 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
     """
     # Получаем системный промпт для текущей задачи
     system_prompt = get_zero_shot_prompt(task)
-    
     results = []  # Список результатов для всех обработанных текстов
     
     # Открываем входной CSV файл
@@ -143,7 +138,6 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
             # Пропускаем пустые строки
             if not row or not row[0]:
                 continue
-            
             text = row[0]  # Берём первый столбец как текст
             result = call_model(text, system_prompt)  # Отправляем текст в модель
             
@@ -153,7 +147,6 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
                 "text": text,  # Исходный текст
                 "prediction": result  # Результат от модели (или None если ошибка)
             }
-            
             results.append(entry)
     
     # Формируем финальную структуру данных
@@ -167,7 +160,6 @@ def process_csv_batch(input_file: str, output_file: str, task: str):
     # Сохраняем результаты в JSON файл с форматированием
     with open(output_file, 'w', encoding='utf-8') as f_out:
         json.dump(output_data, f_out, ensure_ascii=False, indent=2)
-
 
 # Точка входа в скрипт
 if __name__ == "__main__":
