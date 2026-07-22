@@ -47,6 +47,11 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
         # Исправленная работа с choices (openai v1.x+)
         choice = response.choices[0]
         content = choice.message.content
+        
+        # Дебаг: печатаем полный ответ от модели
+        print(f"[Ответ модели] {repr(content)}")
+        print(f"[finish_reason] {choice.finish_reason}")
+        
         if not content:
             print(f"[Ошибка парсинга] Пустой ответ от модели")
             return None
