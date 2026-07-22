@@ -11,7 +11,7 @@ client = OpenAI(
     api_key="lm-studio",
     timeout=timeout_seconds  # Передаем уже в секундах
 )
-MODEL_NAME = "qwen/qwen3.6-35b-a3b"
+MODEL_NAME = "qwen/qwen3.6-27b"
 
 def get_zero_shot_prompt(task: str) -> str:
     if task == "classify":
