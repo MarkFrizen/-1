@@ -1,5 +1,6 @@
 import json
 import csv
+import re
 from openai import OpenAI
 
 # --- КОНФИГУРАЦИЯ ---
@@ -46,10 +47,28 @@ def call_model(user_text: str, system_instruction: str) -> dict | None:
         # Исправленная работа с choices (openai v1.x+)
         choice = response.choices[0]
         content = choice.message.content
+        if not content:
+            print(f"[Ошибка парсинга] Пустой ответ от модели")
+            return None
+        
+        # Пытаемся извлечь JSON из ответа (удаляем markdown-блоки и пояснения)
+        json_str = content.strip()
+        
+        # Если ответ в markdown-блоках, извлекаем JSON
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', json_str, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Пытаемся найти JSON-объект в тексте
+            json_match = re.search(r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', json_str)
+            if json_match:
+                json_str = json_match.group(1)
+        
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            print(f"[Ошибка парсинга] Модель вернула не JSON:\n{content}")
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"[Ошибка парсинга] Не удалось разобрать JSON: {e}")
+            print(f"[Сырые данные] {repr(json_str)}")
             return None
     except Exception as e:
         print(f"[Критическая ошибка API] {type(e).__name__}: {e}")
@@ -87,3 +106,8 @@ if __name__ == "__main__":
         print(f"Успех! Результат: {result}")
     else:
         print("Не удалось получить ответ. Проверьте LM Studio и модель.")
+        print("\nВозможные причины:")
+        print("1. LM Studio не запущен или модель не загружена")
+        print("2. Неправильный URL сервера (текущий: http://192.168.8.11:1234)")
+        print("3. Модель не отвечает в заданном формате JSON")
+        print("4. Таймаут соединения")
